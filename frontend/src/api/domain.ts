@@ -1,6 +1,6 @@
 import { api, page, unwrap } from './client'
 import type { AllergenProfile, AuditEvent, ContactEdge, MatrixResult, ProcessRoute, User, VersionDiff } from '@/types/domain'
-import type { AssessmentRun, AssessmentStatus } from '@/types/assessment'
+import type { AssessmentRun, AssessmentInputDiff, AssessmentStatus } from '@/types/assessment'
 
 export const authApi = {
   login: (username: string, password: string) => unwrap<{ token: string; expires_at: string; user: User }>(api.post('/auth/login', { username, password })),
@@ -31,8 +31,10 @@ export const assessmentApi = {
   matrix: (routeId: number) => unwrap<MatrixResult>(api.post('/matrix/compute', { route_id: routeId })),
   list: (params: { route_id?: number; status?: AssessmentStatus } = {}) => page<AssessmentRun>(api.get('/assessments', { params })),
   get: (id: number) => unwrap<AssessmentRun>(api.get(`/assessments/${id}`)),
+  diff: (id: number) => unwrap<AssessmentInputDiff>(api.get(`/assessments/${id}/diff`)),
   create: (routeId: number) => unwrap<AssessmentRun>(api.post('/assessments', { route_id: routeId })),
   run: (id: number) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/run`)),
+  recompute: (id: number) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/recompute`)),
   review: (id: number, decision: 'accepted' | 'rejected', reason: string) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/review`, { decision, reason })),
 }
 

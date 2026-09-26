@@ -102,6 +102,12 @@ docker compose down -v --remove-orphans
 
 每次运行保存完整输入快照、矩阵、风险项、算法/阈值版本和完成时间。没有结果更新接口；复核仅条件更新状态与复核字段。新输入版本不会覆盖旧 JSON，而是把旧结果标记为 `stale`。
 
+### 过期归因与重算
+
+打开 `stale` 或 `rejected` 评估时，`GET /assessments/:id/diff` 逐项比对输入快照与当前输入，只返回确实变化的项：过敏原谱版本、路线步骤（新增/删除/改名/换谱/顺序）、接触边版本与启用状态、路线声明过敏原增删，并给出路线版本对照。没有差异时 `has_changes=false`、`recompute_available=false`，提示现有结果仍可用，不提供重算入口；被拒绝的评估即使无差异也允许重算。
+
+重算 `POST /assessments/:id/recompute` 仅 analyst/admin 可用，且只对 `stale`（且确有差异）或 `rejected`、尚未被替代的评估开放。重算按当前输入完整计算一遍，结果作为**新的一条** `pending_review` 评估；原记录状态与结果不变、保持只读，仅写入 `superseded_by_id` 指向新评估。原记录的 `assessment.superseded` 与新记录的 `assessment.recomputed` 两条审计在同一事务写入，元数据均包含完整差异项。
+
 ## 传播算法
 
 1. 从 `ProcessRoute.ordered_steps_json` 建立节点，从同路线且 `enabled=true` 的 `ContactEdge` 建立有向边。
@@ -174,6 +180,8 @@ pending_review | accepted | rejected --输入变化--> stale
 | 查看谱、路线、矩阵、评估 | ✓ | ✓ | ✓ |
 | 新建/更新谱、路线、边 | ✓ |  | ✓ |
 | 提交/运行评估 | ✓ |  | ✓ |
+| 过期归因比对（只读） | ✓ | ✓ | ✓ |
+| 重算过期/被拒绝评估 | ✓ |  | ✓ |
 | 接受/拒绝评估 |  | ✓ | ✓ |
 | 审计检索 |  | ✓ | ✓ |
 
@@ -196,7 +204,9 @@ pending_review | accepted | rejected --输入变化--> stale
 | `POST` | `/matrix/compute` | 计算但不持久化矩阵 |
 | `GET/POST` | `/assessments` | 查询 / 入队 |
 | `GET` | `/assessments/:id` | 不可变结果详情 |
+| `GET` | `/assessments/:id/diff` | 过期/拒绝评估逐项输入差异归因与是否可重算 |
 | `POST` | `/assessments/:id/run` | 条件运行 |
+| `POST` | `/assessments/:id/recompute` | 按当前输入重算，生成新的待复核评估并替代原记录 |
 | `POST` | `/assessments/:id/review` | reviewer 接受或拒绝 |
 | `GET` | `/audit` | 审计检索 |
 | `GET` | `/versions/:entityType/:id?version=n` | 最近版本变更摘要 |

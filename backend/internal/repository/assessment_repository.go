@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -21,6 +22,7 @@ type AssessmentRepository interface {
 	ResetCalculation(context.Context, uint, string, AuditContext) error
 	CompleteCalculation(context.Context, uint, datatypes.JSON, datatypes.JSON, datatypes.JSON, constants.RiskLevel, string, AuditContext) error
 	Review(context.Context, uint, constants.AssessmentStatus, uint, string, AuditContext) error
+	CreateRecompute(context.Context, *model.AssessmentRun, model.AssessmentRun, datatypes.JSON, AuditContext) error
 }
 
 type assessmentRepository struct{ db *gorm.DB }
@@ -173,6 +175,39 @@ func (r *assessmentRepository) Review(ctx context.Context, id uint, target const
 		}
 		if err := tx.Create(&audit).Error; err != nil {
 			return fmt.Errorf("audit assessment review: %w", err)
+		}
+		return nil
+	})
+}
+
+func (r *assessmentRepository) CreateRecompute(ctx context.Context, newRun *model.AssessmentRun, source model.AssessmentRun, diff datatypes.JSON, scope AuditContext) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(newRun).Error; err != nil {
+			return fmt.Errorf("create recomputed assessment run: %w", err)
+		}
+		allowed := []constants.AssessmentStatus{constants.AssessmentStale, constants.AssessmentRejected}
+		result := tx.Model(&model.AssessmentRun{}).
+			Where("id = ? AND assessment_status IN ? AND superseded_by_id IS NULL", source.ID, allowed).
+			Update("superseded_by_id", newRun.ID)
+		if result.Error != nil {
+			return fmt.Errorf("supersede source assessment: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("supersede source assessment: %w", ErrStateConflict)
+		}
+		supersededAudit, err := makeAudit(scope, "assessment.superseded", "assessment_run", source.ID, assessmentSummary(source), assessmentSummary(*newRun), map[string]any{"source_status": source.AssessmentStatus, "new_run_id": newRun.ID, "diff": json.RawMessage(diff)})
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&supersededAudit).Error; err != nil {
+			return fmt.Errorf("audit assessment supersession: %w", err)
+		}
+		recomputedAudit, err := makeAudit(scope, "assessment.recomputed", "assessment_run", newRun.ID, "", assessmentSummary(*newRun), map[string]any{"recomputed_from": source.ID, "source_status": source.AssessmentStatus, "route_id": newRun.RouteID, "highest_risk_level": newRun.HighestRiskLevel, "algorithm_version": newRun.AlgorithmVersion, "diff": json.RawMessage(diff)})
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&recomputedAudit).Error; err != nil {
+			return fmt.Errorf("audit assessment recompute: %w", err)
 		}
 		return nil
 	})

@@ -191,7 +191,7 @@ func (s *AssessmentService) computeRoute(ctx context.Context, route model.Proces
 	sort.Slice(profileVersions, func(i, j int) bool { return profileVersions[i]["id"].(uint) < profileVersions[j]["id"].(uint) })
 	edgeVersions := make([]map[string]any, 0, len(edges))
 	for _, edge := range edges {
-		edgeVersions = append(edgeVersions, map[string]any{"id": edge.ID, "version": edge.Version, "enabled": edge.Enabled})
+		edgeVersions = append(edgeVersions, map[string]any{"id": edge.ID, "version": edge.Version, "enabled": edge.Enabled, "from_step_code": edge.FromStepCode, "to_step_code": edge.ToStepCode})
 	}
 	snapshotValue := map[string]any{"captured_at": time.Now().UTC(), "route": map[string]any{"id": route.ID, "code": route.RouteCode, "version": route.Version, "steps": steps, "declared_allergens": declared}, "profiles": profileVersions, "contact_edges": edgeVersions, "thresholds": s.thresholds, "algorithm_version": s.algorithm, "max_depth": s.maxDepth, "cycles": result.Cycles}
 	snapshot, err := json.Marshal(snapshotValue)

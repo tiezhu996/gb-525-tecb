@@ -25,7 +25,74 @@ export interface AssessmentRun {
   review_reason: string
   completed_at?: string
   reviewed_at?: string
+  superseded_by_id?: number
   created_at: string
+}
+
+export type ProfileInputChangeType = 'version_changed' | 'removed'
+export type RouteStepInputChangeType = 'added' | 'removed' | 'modified'
+export type ContactEdgeInputChangeType = 'added' | 'removed' | 'version_changed'
+export type DeclaredAllergenChangeType = 'added' | 'removed'
+
+export interface ProfileInputChange {
+  profile_id: number
+  profile_code: string
+  material_name: string
+  snapshot_version: number
+  current_version: number
+  change_type: ProfileInputChangeType
+}
+
+export interface RouteStepInputChange {
+  step_code: string
+  change_type: RouteStepInputChangeType
+  snapshot_step_name?: string
+  current_step_name?: string
+  snapshot_profile_id: number
+  current_profile_id: number
+  snapshot_profile_code?: string
+  current_profile_code?: string
+  snapshot_order: number
+  current_order: number
+  reordered: boolean
+}
+
+export interface ContactEdgeInputChange {
+  edge_id: number
+  from_step_code: string
+  to_step_code: string
+  change_type: ContactEdgeInputChangeType
+  snapshot_version: number
+  current_version: number
+  snapshot_enabled?: boolean
+  current_enabled?: boolean
+}
+
+export interface DeclaredAllergenChange {
+  allergen: string
+  change_type: DeclaredAllergenChangeType
+}
+
+export interface RouteInputChange {
+  snapshot_version: number
+  current_version: number
+  version_changed: boolean
+  declared_allergen_changes: DeclaredAllergenChange[]
+}
+
+export interface AssessmentInputDiff {
+  assessment_id: number
+  assessment_status: AssessmentStatus
+  route_status: string
+  route_available: boolean
+  profile_changes: ProfileInputChange[]
+  route_step_changes: RouteStepInputChange[]
+  contact_edge_changes: ContactEdgeInputChange[]
+  route_change?: RouteInputChange
+  has_changes: boolean
+  recompute_available: boolean
+  recompute_reason?: string
+  superseded_by_id?: number
 }
 
 export interface EdgeEvidence {

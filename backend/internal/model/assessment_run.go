@@ -21,6 +21,7 @@ type AssessmentRun struct {
 	ReviewReason      string                     `gorm:"type:text" json:"review_reason"`
 	CompletedAt       *time.Time                 `json:"completed_at"`
 	ReviewedAt        *time.Time                 `json:"reviewed_at"`
+	SupersededByID    *uint                      `gorm:"index" json:"superseded_by_id"`
 	CreatedAt         time.Time                  `json:"created_at"`
 	UpdatedAt         time.Time                  `json:"updated_at"`
 }
