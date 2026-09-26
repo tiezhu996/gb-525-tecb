@@ -23,9 +23,26 @@ export interface AssessmentRun {
   created_by: number
   reviewed_by?: number
   review_reason: string
+  superseded_by_id?: number
+  recalc_of_id?: number
   completed_at?: string
   reviewed_at?: string
   created_at: string
+}
+
+export interface StaleDiffItem {
+  kind: 'route' | 'profile' | 'contact_edge'
+  code: string
+  change: 'steps_changed' | 'declared_changed' | 'version_changed' | 'added' | 'removed'
+  before: string
+  after: string
+}
+
+export interface StaleDiff {
+  assessment_id: number
+  assessment_status: AssessmentStatus
+  items: StaleDiffItem[]
+  current_result_usable: boolean
 }
 
 export interface EdgeEvidence {

@@ -119,3 +119,33 @@ func (h *AssessmentHandler) Review(c *gin.Context) {
 	}
 	util.OK(c, item)
 }
+
+func (h *AssessmentHandler) Diff(c *gin.Context) {
+	id, ok := util.PathID(c, "id")
+	if !ok {
+		return
+	}
+	item, err := h.service.StaleDiff(c.Request.Context(), id)
+	if err != nil {
+		util.Error(c, err)
+		return
+	}
+	util.OK(c, item)
+}
+
+func (h *AssessmentHandler) Recalculate(c *gin.Context) {
+	id, ok := util.PathID(c, "id")
+	if !ok {
+		return
+	}
+	principal, ok := util.Principal(c)
+	if !ok {
+		return
+	}
+	item, err := h.service.Recalculate(c.Request.Context(), id, principal, RequestID(c))
+	if err != nil {
+		util.Error(c, err)
+		return
+	}
+	util.Created(c, item)
+}

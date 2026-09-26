@@ -21,6 +21,7 @@ type AssessmentRepository interface {
 	ResetCalculation(context.Context, uint, string, AuditContext) error
 	CompleteCalculation(context.Context, uint, datatypes.JSON, datatypes.JSON, datatypes.JSON, constants.RiskLevel, string, AuditContext) error
 	Review(context.Context, uint, constants.AssessmentStatus, uint, string, AuditContext) error
+	Recalculate(context.Context, uint, *model.AssessmentRun, []dto.StaleDiffItem, AuditContext) error
 }
 
 type assessmentRepository struct{ db *gorm.DB }
@@ -173,6 +174,37 @@ func (r *assessmentRepository) Review(ctx context.Context, id uint, target const
 		}
 		if err := tx.Create(&audit).Error; err != nil {
 			return fmt.Errorf("audit assessment review: %w", err)
+		}
+		return nil
+	})
+}
+
+func (r *assessmentRepository) Recalculate(ctx context.Context, originalID uint, run *model.AssessmentRun, diff []dto.StaleDiffItem, scope AuditContext) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(run).Error; err != nil {
+			return fmt.Errorf("create recalculated assessment run: %w", err)
+		}
+		staleStatuses := []constants.AssessmentStatus{constants.AssessmentStale, constants.AssessmentRejected}
+		result := tx.Model(&model.AssessmentRun{}).Where("id = ? AND assessment_status IN ? AND superseded_by_id IS NULL", originalID, staleStatuses).Update("superseded_by_id", run.ID)
+		if result.Error != nil {
+			return fmt.Errorf("supersede original assessment: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("supersede original assessment: %w", ErrStateConflict)
+		}
+		audit, err := makeAudit(scope, "assessment.recalculated", "assessment_run", originalID, "superseded_by=none", fmt.Sprintf("superseded_by=%d", run.ID), map[string]any{"new_run_id": run.ID, "diff": diff})
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&audit).Error; err != nil {
+			return fmt.Errorf("audit assessment recalculation: %w", err)
+		}
+		pending, err := makeAudit(scope, "assessment.pending_review", "assessment_run", run.ID, "", assessmentSummary(*run), map[string]any{"recalc_of": originalID, "highest_risk_level": run.HighestRiskLevel, "algorithm_version": run.AlgorithmVersion})
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&pending).Error; err != nil {
+			return fmt.Errorf("audit recalculated assessment: %w", err)
 		}
 		return nil
 	})

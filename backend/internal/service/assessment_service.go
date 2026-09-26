@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"food-allergen-crosscontact-analyzer/backend/internal/analyzer"
@@ -30,6 +32,32 @@ type AssessmentService struct {
 type queuedAssessmentSnapshot struct {
 	RouteID             uint `json:"route_id"`
 	RouteVersionAtQueue uint `json:"route_version_at_queue"`
+}
+
+type completedSnapshot struct {
+	Route    snapshotRoute    `json:"route"`
+	Profiles []snapshotEntity `json:"profiles"`
+	Edges    []snapshotEdge   `json:"contact_edges"`
+}
+
+type snapshotRoute struct {
+	ID       uint            `json:"id"`
+	Code     string          `json:"code"`
+	Version  uint            `json:"version"`
+	Steps    []dto.RouteStep `json:"steps"`
+	Declared []string        `json:"declared_allergens"`
+}
+
+type snapshotEntity struct {
+	ID      uint   `json:"id"`
+	Code    string `json:"code"`
+	Version uint   `json:"version"`
+}
+
+type snapshotEdge struct {
+	ID      uint `json:"id"`
+	Version uint `json:"version"`
+	Enabled bool `json:"enabled"`
 }
 
 func NewAssessmentService(runs repository.AssessmentRepository, routes repository.RouteRepository, profiles repository.ProfileRepository, edges repository.ContactEdgeRepository, cfg config.Config) (*AssessmentService, error) {
@@ -127,6 +155,60 @@ func (s *AssessmentService) Review(ctx context.Context, id uint, request dto.Rev
 func (s *AssessmentService) Get(ctx context.Context, id uint) (model.AssessmentRun, error) {
 	return s.runs.Get(ctx, id)
 }
+
+func (s *AssessmentService) StaleDiff(ctx context.Context, id uint) (dto.StaleDiff, error) {
+	run, err := s.runs.Get(ctx, id)
+	if err != nil {
+		return dto.StaleDiff{}, err
+	}
+	items, err := s.snapshotDiff(ctx, run)
+	if err != nil {
+		return dto.StaleDiff{}, err
+	}
+	return dto.StaleDiff{AssessmentID: run.ID, AssessmentStatus: string(run.AssessmentStatus), Items: items, CurrentResultUsable: len(items) == 0}, nil
+}
+
+func (s *AssessmentService) Recalculate(ctx context.Context, id uint, actor Principal, requestID string) (model.AssessmentRun, error) {
+	original, err := s.runs.Get(ctx, id)
+	if err != nil {
+		return model.AssessmentRun{}, err
+	}
+	if original.AssessmentStatus != constants.AssessmentStale && original.AssessmentStatus != constants.AssessmentRejected {
+		return model.AssessmentRun{}, NewError(http.StatusConflict, "state_conflict", "仅已过期或被拒绝的评估可以重算", nil)
+	}
+	if original.SupersededByID != nil {
+		return model.AssessmentRun{}, NewError(http.StatusConflict, "state_conflict", "该评估已被更新的评估替代", nil)
+	}
+	route, err := s.routes.Get(ctx, original.RouteID)
+	if err != nil {
+		return model.AssessmentRun{}, err
+	}
+	if route.RouteStatus != "active" {
+		return model.AssessmentRun{}, NewError(http.StatusConflict, "route_inactive", "只有 active 路线可以重算评估", nil)
+	}
+	diff, err := s.snapshotDiff(ctx, original)
+	if err != nil {
+		return model.AssessmentRun{}, err
+	}
+	result, snapshot, err := s.computeRoute(ctx, route)
+	if err != nil {
+		return model.AssessmentRun{}, err
+	}
+	matrixJSON, err := json.Marshal(result.Matrix)
+	if err != nil {
+		return model.AssessmentRun{}, fmt.Errorf("encode assessment matrix: %w", err)
+	}
+	riskJSON, err := json.Marshal(result.RiskItems)
+	if err != nil {
+		return model.AssessmentRun{}, fmt.Errorf("encode assessment risk items: %w", err)
+	}
+	now := time.Now().UTC()
+	run := model.AssessmentRun{RouteID: route.ID, AssessmentStatus: constants.AssessmentPendingReview, InputSnapshotJSON: snapshot, MatrixJSON: datatypes.JSON(matrixJSON), RiskItemsJSON: datatypes.JSON(riskJSON), HighestRiskLevel: result.HighestRiskLevel, AlgorithmVersion: s.algorithm, CreatedBy: actor.ID, RecalcOfID: &original.ID, CompletedAt: &now}
+	if err := s.runs.Recalculate(ctx, original.ID, &run, diff, AuditScope(actor, requestID)); err != nil {
+		return model.AssessmentRun{}, err
+	}
+	return s.runs.Get(ctx, run.ID)
+}
 func (s *AssessmentService) List(ctx context.Context, query dto.AssessmentQuery) ([]model.AssessmentRun, int64, error) {
 	return s.runs.List(ctx, query)
 }
@@ -199,6 +281,120 @@ func (s *AssessmentService) computeRoute(ctx context.Context, route model.Proces
 		return analyzer.Result{}, nil, fmt.Errorf("encode input snapshot: %w", err)
 	}
 	return result, datatypes.JSON(snapshot), nil
+}
+
+// snapshotDiff compares the completed input snapshot of a run against the
+// current route, profile and contact edge versions and returns only the
+// inputs that actually changed.
+func (s *AssessmentService) snapshotDiff(ctx context.Context, run model.AssessmentRun) ([]dto.StaleDiffItem, error) {
+	var snapshot completedSnapshot
+	if err := json.Unmarshal(run.InputSnapshotJSON, &snapshot); err != nil {
+		return nil, NewError(http.StatusUnprocessableEntity, "assessment_snapshot_invalid", "评估输入快照无法解析", err)
+	}
+	if snapshot.Route.ID == 0 {
+		return nil, NewError(http.StatusUnprocessableEntity, "assessment_snapshot_incomplete", "评估尚未完成计算，没有可比对的输入快照", nil)
+	}
+	route, err := s.routes.Get(ctx, run.RouteID)
+	if err != nil {
+		return nil, err
+	}
+	steps, err := DecodeRouteSteps(route)
+	if err != nil {
+		return nil, err
+	}
+	declared, err := DecodeDeclared(route)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]dto.StaleDiffItem, 0)
+	stepsChanged := !reflect.DeepEqual(snapshot.Route.Steps, steps)
+	snapshotDeclared := normalizeStrings(snapshot.Route.Declared)
+	declaredChanged := !reflect.DeepEqual(snapshotDeclared, declared)
+	if stepsChanged {
+		items = append(items, dto.StaleDiffItem{Kind: "route", Code: route.RouteCode, Change: "steps_changed", Before: summarizeSteps(snapshot.Route.Steps), After: summarizeSteps(steps)})
+	}
+	if declaredChanged {
+		items = append(items, dto.StaleDiffItem{Kind: "route", Code: route.RouteCode, Change: "declared_changed", Before: strings.Join(snapshotDeclared, ", "), After: strings.Join(declared, ", ")})
+	}
+	if !stepsChanged && !declaredChanged && snapshot.Route.Version != route.Version {
+		items = append(items, dto.StaleDiffItem{Kind: "route", Code: route.RouteCode, Change: "version_changed", Before: fmt.Sprintf("v%d", snapshot.Route.Version), After: fmt.Sprintf("v%d", route.Version)})
+	}
+	profileIDs := make([]uint, 0, len(steps))
+	seenProfiles := make(map[uint]bool)
+	for _, step := range steps {
+		if !seenProfiles[step.ProfileID] {
+			seenProfiles[step.ProfileID] = true
+			profileIDs = append(profileIDs, step.ProfileID)
+		}
+	}
+	profiles, err := s.profiles.GetMany(ctx, profileIDs)
+	if err != nil {
+		return nil, err
+	}
+	currentProfiles := make(map[uint]model.AllergenProfile, len(profiles))
+	for _, profile := range profiles {
+		currentProfiles[profile.ID] = profile
+	}
+	snapshotProfiles := make(map[uint]bool, len(snapshot.Profiles))
+	for _, snap := range snapshot.Profiles {
+		snapshotProfiles[snap.ID] = true
+		current, ok := currentProfiles[snap.ID]
+		if !ok {
+			items = append(items, dto.StaleDiffItem{Kind: "profile", Code: snap.Code, Change: "removed", Before: fmt.Sprintf("v%d", snap.Version), After: "不再被路线引用"})
+			continue
+		}
+		if current.Version != snap.Version {
+			items = append(items, dto.StaleDiffItem{Kind: "profile", Code: snap.Code, Change: "version_changed", Before: fmt.Sprintf("v%d", snap.Version), After: fmt.Sprintf("v%d", current.Version)})
+		}
+	}
+	addedProfiles := make([]model.AllergenProfile, 0)
+	for _, profile := range profiles {
+		if !snapshotProfiles[profile.ID] {
+			addedProfiles = append(addedProfiles, profile)
+		}
+	}
+	sort.Slice(addedProfiles, func(i, j int) bool { return addedProfiles[i].ID < addedProfiles[j].ID })
+	for _, profile := range addedProfiles {
+		items = append(items, dto.StaleDiffItem{Kind: "profile", Code: profile.ProfileCode, Change: "added", Before: "—", After: fmt.Sprintf("v%d", profile.Version)})
+	}
+	edges, err := s.edges.ForRoute(ctx, run.RouteID)
+	if err != nil {
+		return nil, err
+	}
+	currentEdges := make(map[uint]model.ContactEdge, len(edges))
+	for _, edge := range edges {
+		currentEdges[edge.ID] = edge
+	}
+	snapshotEdges := make(map[uint]bool, len(snapshot.Edges))
+	for _, snap := range snapshot.Edges {
+		snapshotEdges[snap.ID] = true
+		current, ok := currentEdges[snap.ID]
+		if !ok {
+			items = append(items, dto.StaleDiffItem{Kind: "contact_edge", Code: fmt.Sprintf("边 #%d", snap.ID), Change: "removed", Before: edgeVersionSummary(snap.Version, snap.Enabled), After: "已删除"})
+			continue
+		}
+		if current.Version != snap.Version || current.Enabled != snap.Enabled {
+			items = append(items, dto.StaleDiffItem{Kind: "contact_edge", Code: current.FromStepCode + "→" + current.ToStepCode, Change: "version_changed", Before: edgeVersionSummary(snap.Version, snap.Enabled), After: edgeVersionSummary(current.Version, current.Enabled)})
+		}
+	}
+	for _, edge := range edges {
+		if !snapshotEdges[edge.ID] {
+			items = append(items, dto.StaleDiffItem{Kind: "contact_edge", Code: edge.FromStepCode + "→" + edge.ToStepCode, Change: "added", Before: "—", After: edgeVersionSummary(edge.Version, edge.Enabled)})
+		}
+	}
+	return items, nil
+}
+
+func summarizeSteps(steps []dto.RouteStep) string {
+	parts := make([]string, 0, len(steps))
+	for _, step := range steps {
+		parts = append(parts, fmt.Sprintf("%s(谱#%d)", step.StepCode, step.ProfileID))
+	}
+	return strings.Join(parts, " → ")
+}
+
+func edgeVersionSummary(version uint, enabled bool) string {
+	return fmt.Sprintf("v%d · enabled=%t", version, enabled)
 }
 
 func (s *AssessmentService) resetAfterFailure(ctx context.Context, id uint, calculationErr error, actor Principal, requestID string) {

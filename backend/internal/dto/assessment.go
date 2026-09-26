@@ -25,3 +25,18 @@ type AssessmentSummary struct {
 	ByStatus      map[string]int64 `json:"by_status"`
 	PendingReview int64            `json:"pending_review"`
 }
+
+type StaleDiffItem struct {
+	Kind   string `json:"kind"`
+	Code   string `json:"code"`
+	Change string `json:"change"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+}
+
+type StaleDiff struct {
+	AssessmentID        uint            `json:"assessment_id"`
+	AssessmentStatus    string          `json:"assessment_status"`
+	Items               []StaleDiffItem `json:"items"`
+	CurrentResultUsable bool            `json:"current_result_usable"`
+}

@@ -13,7 +13,9 @@ func registerAssessmentRoutes(group *gin.RouterGroup, h *handler.AssessmentHandl
 	runs.GET("", h.List)
 	runs.GET("/summary", h.Summary)
 	runs.GET("/:id", h.Get)
+	runs.GET("/:id/diff", h.Diff)
 	runs.POST("", middleware.RBAC(constants.RoleQualityAnalyst, constants.RoleAdmin), h.Create)
 	runs.POST("/:id/run", middleware.RBAC(constants.RoleQualityAnalyst, constants.RoleAdmin), h.Run)
+	runs.POST("/:id/recalculate", middleware.RBAC(constants.RoleQualityAnalyst, constants.RoleAdmin), h.Recalculate)
 	runs.POST("/:id/review", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin), h.Review)
 }

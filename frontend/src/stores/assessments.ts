@@ -21,5 +21,6 @@ export const useAssessmentStore = defineStore('assessments', () => {
   async function create(routeId: number) { const run = await assessmentApi.create(routeId); await load(); return run }
   async function execute(id: number) { const run = await assessmentApi.run(id); await load(); return run }
   async function review(id: number, decision: 'accepted' | 'rejected', reason: string) { const run = await assessmentApi.review(id, decision, reason); await load(); return run }
-  return { runs, loading, statusCounts, riskCounts, load, create, execute, review }
+  async function recalculate(id: number) { const run = await assessmentApi.recalculate(id); await load(); return run }
+  return { runs, loading, statusCounts, riskCounts, load, create, execute, review, recalculate }
 })

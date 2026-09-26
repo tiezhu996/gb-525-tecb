@@ -1,6 +1,6 @@
 import { api, page, unwrap } from './client'
 import type { AllergenProfile, AuditEvent, ContactEdge, MatrixResult, ProcessRoute, User, VersionDiff } from '@/types/domain'
-import type { AssessmentRun, AssessmentStatus } from '@/types/assessment'
+import type { AssessmentRun, AssessmentStatus, StaleDiff } from '@/types/assessment'
 
 export const authApi = {
   login: (username: string, password: string) => unwrap<{ token: string; expires_at: string; user: User }>(api.post('/auth/login', { username, password })),
@@ -34,6 +34,8 @@ export const assessmentApi = {
   create: (routeId: number) => unwrap<AssessmentRun>(api.post('/assessments', { route_id: routeId })),
   run: (id: number) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/run`)),
   review: (id: number, decision: 'accepted' | 'rejected', reason: string) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/review`, { decision, reason })),
+  diff: (id: number) => unwrap<StaleDiff>(api.get(`/assessments/${id}/diff`)),
+  recalculate: (id: number) => unwrap<AssessmentRun>(api.post(`/assessments/${id}/recalculate`)),
 }
 
 export const auditApi = {

@@ -40,6 +40,7 @@ docker compose down -v --remove-orphans
 - 接触关系：在路线内维护来源/目标步骤、接触类型、共享设备、清洗衰减、带入概率和证据记录。
 - 交叉接触矩阵：从真实路线、谱和已启用接触边计算目标步骤 × 过敏原矩阵，可按过敏原筛选并检查完整证据路径。
 - 评估工作台：执行 `queued -> calculating -> pending_review -> accepted | rejected` 状态流；输入变化使旧结果变为 `stale`。
+- 过期归因与重算：打开过期评估时逐项比对快照中的谱、路线步骤和接触边版本，只列出确实变化的输入；无差异则现有结果仍可用且不提供重算入口。过期或被拒绝的评估可按当前输入重算，结果作为新评估回到待复核，原记录只读并标明替代它的新评估。
 - 审计检索：记录 request ID、操作者、实体、动作、前后摘要和版本元数据，并提供版本摘要对比。
 
 系统不包含订单、库存、采购、财务、电商、通用质量工单或生产设备控制。
@@ -100,7 +101,7 @@ docker compose down -v --remove-orphans
 
 ### `AssessmentRun`
 
-每次运行保存完整输入快照、矩阵、风险项、算法/阈值版本和完成时间。没有结果更新接口；复核仅条件更新状态与复核字段。新输入版本不会覆盖旧 JSON，而是把旧结果标记为 `stale`。
+每次运行保存完整输入快照、矩阵、风险项、算法/阈值版本和完成时间。没有结果更新接口；复核仅条件更新状态与复核字段。新输入版本不会覆盖旧 JSON，而是把旧结果标记为 `stale`。重算会写入一条新的 `pending_review` 运行（`recalc_of_id` 指向来源），原运行的 `superseded_by_id` 指向新运行并保持只读；重算与差异项一起写入审计。
 
 ## 传播算法
 
@@ -196,7 +197,9 @@ pending_review | accepted | rejected --输入变化--> stale
 | `POST` | `/matrix/compute` | 计算但不持久化矩阵 |
 | `GET/POST` | `/assessments` | 查询 / 入队 |
 | `GET` | `/assessments/:id` | 不可变结果详情 |
+| `GET` | `/assessments/:id/diff` | 快照与当前输入的逐项差异 |
 | `POST` | `/assessments/:id/run` | 条件运行 |
+| `POST` | `/assessments/:id/recalculate` | 过期/被拒绝评估按当前输入重算 |
 | `POST` | `/assessments/:id/review` | reviewer 接受或拒绝 |
 | `GET` | `/audit` | 审计检索 |
 | `GET` | `/versions/:entityType/:id?version=n` | 最近版本变更摘要 |
